@@ -26,7 +26,6 @@ async def generate_pyrogram_session(bot, user_id):
     login_token_b64 = base64.urlsafe_b64encode(login_token).decode()
     qr_url = f"tg://login?token={login_token_b64}"
 
-    # Generate QR Image
     qr = qrcode.make(qr_url)
     bio = BytesIO()
     bio.name = "qr.png"
@@ -36,32 +35,46 @@ async def generate_pyrogram_session(bot, user_id):
     await bot.send_photo(
         user_id,
         bio,
-        caption="📲 **Scan this QR using Telegram**\n\n"
-                "Go to:\n"
-                "`Settings → Devices → Link Desktop Device`\n\n"
-                "⏳ QR expires in 30 seconds."
+        caption=(
+            "🚀 **Scan QR To Login**\n\n"
+            "Open Telegram → Settings → Devices → Link Desktop Device\n\n"
+            "⏳ Expires in 30 seconds."
+        )
     )
 
     # Wait for scan
-    for _ in range(15):  # ~45 seconds
+    imported = False
+    for _ in range(20):
         await asyncio.sleep(3)
         try:
             await app.invoke(ImportLoginToken(token=login_token))
+            imported = True
             break
         except Exception:
             continue
-    else:
-        await bot.send_message(user_id, "❌ QR Expired. Please try again.")
+
+    if not imported:
+        await bot.send_message(user_id, "❌ QR Expired. Try again.")
         await app.disconnect()
         return
 
     try:
         me = await app.get_me()
     except SessionPasswordNeeded:
-        await bot.send_message(user_id, "🔐 2FA Enabled.\nPlease send your password.")
+        await bot.send_message(user_id, "🔐 2FA Enabled.\nSend your password.")
         return "PASSWORD_REQUIRED", app
 
+    # 🔑 Export Session
     session_string = await app.export_session_string()
+
+    # 💾 Save to Saved Messages
+    await app.send_message(
+        "me",
+        f"🔐 **Your Pyrogram String Session**\n\n"
+        f"`{session_string}`\n\n"
+        f"⚠️ Keep it private & secure."
+    )
+
     await app.disconnect()
 
-    return session_string, me
+    return "SUCCESS", me
