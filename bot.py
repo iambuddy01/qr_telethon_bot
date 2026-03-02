@@ -10,7 +10,7 @@ from qr_generator import generate_pyrogram_session
 
 
 # -------------------------------------------------
-# Logging Setup (Beautiful VPS / Heroku Logs)
+# Logging Setup
 # -------------------------------------------------
 
 logging.basicConfig(
@@ -49,12 +49,12 @@ bot = Client(
     bot_token=BOT_TOKEN
 )
 
-# Temporary store for 2FA sessions
+# Store pending 2FA sessions
 pending_password = {}
 
 
 # -------------------------------------------------
-# Start Command
+# /start Command
 # -------------------------------------------------
 
 @bot.on_message(filters.command("start"))
@@ -65,8 +65,8 @@ async def start_handler(client, message):
         "instantly using secure QR login.\n\n"
         "✨ No phone number typing\n"
         "✨ No OTP entering\n"
-        "✨ Secure & fast login\n\n"
-        "Click the button below to begin."
+        "✨ Fast & Secure\n\n"
+        "Click below to begin."
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -87,12 +87,12 @@ async def generate_callback(client, callback_query):
     user_id = callback_query.from_user.id
 
     await callback_query.message.edit_text(
-        "⏳ **Generating QR Code...**"
+        "⏳ **Generating QR Code...**\n\nPlease wait..."
     )
 
     result = await generate_pyrogram_session(bot, user_id)
 
-    # QR Expired
+    # ❌ QR Expired
     if result == "EXPIRED":
         keyboard = InlineKeyboardMarkup(
             [[InlineKeyboardButton("🔄 Regenerate QR", callback_data="gen_pyro")]]
@@ -106,17 +106,21 @@ async def generate_callback(client, callback_query):
         )
         return
 
-    # 2FA Required
+    # 🔐 2FA Required
     if isinstance(result, tuple) and result[0] == "PASSWORD_REQUIRED":
-        pending_password[user_id] = result[1]
+        app = result[1]
+        qr_msg = result[2]
+
+        pending_password[user_id] = (app, qr_msg)
+
         await bot.send_message(
             user_id,
             "🔐 **Two-Step Verification Enabled**\n\n"
-            "Please send your Telegram password."
+            "Please send your Telegram account password."
         )
         return
 
-    # SUCCESS
+    # ✅ SUCCESS
     if isinstance(result, tuple) and result[0] == "SUCCESS":
         me = result[1]
 
@@ -138,7 +142,7 @@ inside your **Saved Messages**.
 
 
 # -------------------------------------------------
-# Handle 2FA Password Input
+# Handle 2FA Password
 # -------------------------------------------------
 
 @bot.on_message(filters.private & ~filters.command("start"))
@@ -148,28 +152,32 @@ async def password_handler(client, message):
     if user_id not in pending_password:
         return
 
-    app = pending_password[user_id]
+    app, qr_msg = pending_password[user_id]
 
     try:
         await app.check_password(message.text)
+
         me = await app.get_me()
         session_string = await app.export_session_string()
 
-        # Save session in Saved Messages
+        # Save to Saved Messages
         await app.send_message(
             "me",
-            f"🔐 **Your Pyrogram String Session**\n\n"
-            f"`{session_string}`\n\n"
-            f"⚠️ Keep it secure."
+            f"🔐 **Your Pyrogram String Session**\n\n`{session_string}`"
         )
 
+        await qr_msg.delete()
         await app.disconnect()
 
         await message.reply(
-            f"🎉 **Login Successful!**\n\n"
-            f"👤 Name: {me.first_name}\n"
-            f"🆔 ID: `{me.id}`\n\n"
-            "✅ Session saved in your Saved Messages."
+            f"""
+🎉 **Login Successful!**
+
+👤 **Name:** {me.first_name}
+🆔 **User ID:** `{me.id}`
+
+✅ Your session has been saved in Saved Messages.
+"""
         )
 
         del pending_password[user_id]
