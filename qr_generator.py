@@ -2,9 +2,12 @@ import asyncio
 import base64
 import qrcode
 from io import BytesIO
+
 from pyrogram import Client
 from pyrogram.raw.functions.auth import ExportLoginToken, ImportLoginToken
+from pyrogram.raw.types.auth import LoginTokenSuccess, LoginTokenMigrateTo
 from pyrogram.errors import SessionPasswordNeeded
+
 from config import API_ID, API_HASH
 
 
@@ -18,6 +21,7 @@ async def generate_pyrogram_session(bot, user_id):
 
     await app.connect()
 
+    # Export Login Token
     token_data = await app.invoke(
         ExportLoginToken(api_id=API_ID, api_hash=API_HASH, except_ids=[])
     )
@@ -26,55 +30,75 @@ async def generate_pyrogram_session(bot, user_id):
     login_token_b64 = base64.urlsafe_b64encode(login_token).decode()
     qr_url = f"tg://login?token={login_token_b64}"
 
+    # Generate QR Image
     qr = qrcode.make(qr_url)
     bio = BytesIO()
     bio.name = "qr.png"
     qr.save(bio, "PNG")
     bio.seek(0)
 
-    await bot.send_photo(
+    qr_message = await bot.send_photo(
         user_id,
         bio,
         caption=(
             "🚀 **Scan QR To Login**\n\n"
-            "Open Telegram → Settings → Devices → Link Desktop Device\n\n"
+            "Telegram → Settings → Devices → Link Desktop Device\n\n"
             "⏳ Expires in 30 seconds."
         )
     )
 
-    # Wait for scan
-    imported = False
-    for _ in range(20):
+    # Wait for Scan
+    success = False
+
+    for _ in range(20):  # ~60 seconds
         await asyncio.sleep(3)
         try:
-            await app.invoke(ImportLoginToken(token=login_token))
-            imported = True
-            break
+            result = await app.invoke(
+                ImportLoginToken(token=login_token)
+            )
+
+            if isinstance(result, LoginTokenSuccess):
+                success = True
+                break
+
+            elif isinstance(result, LoginTokenMigrateTo):
+                await app.disconnect()
+                app = Client(
+                    name="qr_temp",
+                    api_id=API_ID,
+                    api_hash=API_HASH,
+                    in_memory=True,
+                    dc_id=result.dc_id
+                )
+                await app.connect()
+
         except Exception:
             continue
 
-    if not imported:
-        await bot.send_message(user_id, "❌ QR Expired. Try again.")
+    # If QR Expired
+    if not success:
+        await qr_message.delete()
         await app.disconnect()
-        return
+        return "EXPIRED"
 
+    # 2FA Handling
     try:
         me = await app.get_me()
     except SessionPasswordNeeded:
-        await bot.send_message(user_id, "🔐 2FA Enabled.\nSend your password.")
-        return "PASSWORD_REQUIRED", app
+        return "PASSWORD_REQUIRED", app, qr_message
 
-    # 🔑 Export Session
+    # Export Session
     session_string = await app.export_session_string()
 
-    # 💾 Save to Saved Messages
+    # Save Session To Saved Messages
     await app.send_message(
         "me",
         f"🔐 **Your Pyrogram String Session**\n\n"
         f"`{session_string}`\n\n"
-        f"⚠️ Keep it private & secure."
+        f"⚠️ Keep this safe."
     )
 
+    await qr_message.delete()
     await app.disconnect()
 
     return "SUCCESS", me
